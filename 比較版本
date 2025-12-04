@@ -1,0 +1,189 @@
+import subprocess
+import json
+import time
+import os
+from simulated_annealing import quick_experiment, generate_test_graphs
+
+def run_cpp_dfs(graph_data, closed=True):
+    """運行C++ DFS程序（需要先編譯）"""
+    # 將圖形數據寫入文件
+    with open('temp_graph.txt', 'w') as f:
+        f.write(str(len(graph_data)) + '\n')
+        edges = []
+        for node, neighbors in graph_data.items():
+            for neighbor in neighbors:
+                if node < neighbor:  # 避免重複
+                    edges.append((node, neighbor))
+        
+        f.write(str(len(edges)) + '\n')
+        for u, v in edges:
+            f.write(f"{u} {v}\n")
+    
+    # 運行C++程序
+    start_time = time.time()
+    try:
+        result = subprocess.run(
+            ['./dfs_solver', 'temp_graph.txt', 'closed' if closed else 'open'],
+            capture_output=True, text=True, timeout=30  # 設置30秒超時
+        )
+        exec_time = time.time() - start_time
+        
+        if result.returncode == 0:
+            # 解析輸出
+            lines = result.stdout.strip().split('\n')
+            success = "找到路徑" in lines[0] if lines else False
+            return success, exec_time, result.stdout
+        else:
+            return False, exec_time, result.stderr
+    except subprocess.TimeoutExpired:
+        return False, 30.0, "超時"
+    finally:
+        # 清理臨時文件
+        if os.path.exists('temp_graph.txt'):
+            os.remove('temp_graph.txt')
+
+def compare_algorithms():
+    """比較DFS和模擬退火算法"""
+    print("="*70)
+    print("DFS vs 模擬退火算法比較")
+    print("="*70)
+    
+    graphs = generate_test_graphs()
+    
+    comparison_results = []
+    
+    for graph_name, graph in graphs.items():
+        print(f"\n比較 {graph_name} 圖 (節點數: {len(graph)})")
+        
+        # 1. 運行C++ DFS
+        print("運行DFS算法...")
+        dfs_success, dfs_time, dfs_output = run_cpp_dfs(graph, closed=True)
+        
+        # 2. 運行Python模擬退火
+        print("運行模擬退火算法...")
+        from simulated_annealing import SimulatedAnnealingSolver
+        sa_solver = SimulatedAnnealingSolver()
+        path, cost, sa_success, sa_time = sa_solver.solve(
+            graph, closed=True, initial_temp=100.0, 
+            cooling_rate=0.995, max_iterations=5000
+        )
+        
+        # 記錄結果
+        result = {
+            'graph': graph_name,
+            'nodes': len(graph),
+            'DFS': {
+                'success': dfs_success,
+                'time': dfs_time,
+                'output': dfs_output[:100] if dfs_output else ''
+            },
+            'Simulated_Annealing': {
+                'success': sa_success,
+                'time': sa_time,
+                'cost': cost,
+                'path_length': len(path)
+            }
+        }
+        
+        comparison_results.append(result)
+        
+        # 顯示比較
+        print(f"\n{graph_name}圖比較結果:")
+        print(f"  {'指標':<20} {'DFS':<15} {'模擬退火':<15}")
+        print(f"  {'-'*20} {'-'*15} {'-'*15}")
+        print(f"  {'成功':<20} {str(dfs_success):<15} {str(sa_success):<15}")
+        print(f"  {'時間(秒)':<20} {dfs_time:<15.4f} {sa_time:<15.4f}")
+        print(f"  {'成本':<20} {'N/A':<15} {cost:<15}")
+    
+    return comparison_results
+
+def create_visualization(results):
+    """創建簡單的可視化圖表"""
+    import matplotlib.pyplot as plt
+    
+    graphs = [r['graph'] for r in results]
+    dfs_times = [r['DFS']['time'] for r in results]
+    sa_times = [r['Simulated_Annealing']['time'] for r in results]
+    
+    x = range(len(graphs))
+    width = 0.35
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    bars1 = ax.bar([i - width/2 for i in x], dfs_times, width, label='DFS', color='skyblue')
+    bars2 = ax.bar([i + width/2 for i in x], sa_times, width, label='Simulated Annealing', color='lightcoral')
+    
+    ax.set_xlabel('圖形類型')
+    ax.set_ylabel('執行時間 (秒)')
+    ax.set_title('DFS vs 模擬退火算法執行時間比較')
+    ax.set_xticks(x)
+    ax.set_xticklabels(graphs)
+    ax.legend()
+    
+    # 添加數值標籤
+    for bars in [bars1, bars2]:
+        for bar in bars:
+            height = bar.get_height()
+            ax.annotate(f'{height:.3f}',
+                       xy=(bar.get_x() + bar.get_width() / 2, height),
+                       xytext=(0, 3),  # 3點垂直偏移
+                       textcoords="offset points",
+                       ha='center', va='bottom', fontsize=8)
+    
+    plt.tight_layout()
+    plt.savefig('algorithm_comparison.png', dpi=300)
+    print("\n已生成比較圖表: algorithm_comparison.png")
+    
+    plt.show()
+
+if __name__ == "__main__":
+    print("重要提醒：")
+    print("1. 請先編譯C++ DFS程序: g++ dfs_solver.cpp -o dfs_solver")
+    print("2. 確保dfs_solver可執行文件在當前目錄")
+    
+    proceed = input("\n是否繼續？(y/n): ").strip().lower()
+    
+    if proceed == 'y':
+        results = compare_algorithms()
+        
+        # 保存結果
+        with open('comparison_results.json', 'w') as f:
+            json.dump(results, f, indent=2)
+        print("\n結果已保存至: comparison_results.json")
+        
+        # 生成圖表
+        try:
+            create_visualization(results)
+        except Exception as e:
+            print(f"無法生成圖表: {e}")
+        
+        # 生成報告摘要
+        print("\n" + "="*70)
+        print("實驗報告摘要")
+        print("="*70)
+        
+        total_tests = len(results)
+        dfs_success = sum(1 for r in results if r['DFS']['success'])
+        sa_success = sum(1 for r in results if r['Simulated_Annealing']['success'])
+        
+        print(f"總測試數: {total_tests}")
+        print(f"DFS成功率: {dfs_success}/{total_tests} ({dfs_success/total_tests*100:.1f}%)")
+        print(f"模擬退火成功率: {sa_success}/{total_tests} ({sa_success/total_tests*100:.1f}%)")
+        
+        avg_dfs_time = sum(r['DFS']['time'] for r in results) / total_tests
+        avg_sa_time = sum(r['Simulated_Annealing']['time'] for r in results) / total_tests
+        
+        print(f"DFS平均時間: {avg_dfs_time:.4f}秒")
+        print(f"模擬退火平均時間: {avg_sa_time:.4f}秒")
+        
+        if avg_dfs_time > avg_sa_time:
+            print(f"模擬退火比DFS快 {avg_dfs_time/avg_sa_time:.2f} 倍")
+        else:
+            print(f"DFS比模擬退火快 {avg_sa_time/avg_dfs_time:.2f} 倍")
+        
+        print("\n結論建議:")
+        print("1. DFS在小型圖上更可靠，但時間複雜度為O(n!)")
+        print("2. 模擬退火在大型圖上更有效率，但可能找不到最優解")
+        print("3. 根據問題規模選擇合適的算法")
+    
+    print("\n實驗完成！")
